@@ -83,10 +83,16 @@ class BaseSoC(SoCCore):
                 memtype      = "DDR3",
                 nphases      = 4,
                 sys_clk_freq = sys_clk_freq)
+            # a7-35 doesn't have the BRAM budget to spare on an L2 cache once PCIe's completion
+            # buffers are in the design; disabling it (Wishbone talks to LiteDRAM through a plain
+            # width Converter instead) frees ~32 RAMB18 with only a modest DRAM-access latency cost.
+            # (--l2-size always lands in kwargs with LiteX's own default of 8192, so it can't be
+            # used here to detect "not explicitly set" -- a7-35 unconditionally disables L2.)
+            l2_cache_size = 0 if variant == "a7-35" else kwargs.get("l2_size", 8192)
             self.add_sdram("sdram",
                 phy           = self.ddrphy,
                 module        = K4B2G1646F(sys_clk_freq, "1:4"),
-                l2_cache_size = kwargs.get("l2_size", 8192)
+                l2_cache_size = l2_cache_size
             )
 
         # Ethernet ---------------------------------------------------------------------------------
@@ -101,7 +107,10 @@ class BaseSoC(SoCCore):
             self.pcie_phy = S7PCIEPHY(platform, platform.request("pcie_x4"),
                 data_width = 128,
                 bar0_size  = 0x20000)
-            self.add_pcie(phy=self.pcie_phy, ndmas=1)
+            # a7-35 has too little BRAM for the default of 8 (each pending request costs 4 RAMB36
+            # for its completion buffer); 4 keeps PCIe fitting on the xc7a35t.
+            max_pending_requests = 4 if variant == "a7-35" else 8
+            self.add_pcie(phy=self.pcie_phy, ndmas=1, max_pending_requests=max_pending_requests)
 
         # Leds -------------------------------------------------------------------------------------
         if with_led_chaser:
