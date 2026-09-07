@@ -63,6 +63,7 @@ class _CRG(LiteXModule):
 class BaseSoC(SoCCore):
     def __init__(self, variant="a7-35", sys_clk_freq=100e6,
         with_pcie       = False,
+        pcie_lanes      = 4,
         with_ethernet   = False,
         eth_ip          = "192.168.1.50",
         remote_ip       = None,
@@ -104,9 +105,16 @@ class BaseSoC(SoCCore):
 
         # PCIe -------------------------------------------------------------------------------------
         if with_pcie:
-            self.pcie_phy = S7PCIEPHY(platform, platform.request("pcie_x4"),
-                data_width = 128,
-                bar0_size  = 0x20000)
+            # 7-Series PCIe hard IP only supports a 128-bit AXI interface at x4/x8; x1/x2 are 64-bit only.
+            self.pcie_phy = S7PCIEPHY(platform, platform.request(f"pcie_x{pcie_lanes}"),
+                data_width = 128 if pcie_lanes >= 4 else 64,
+                bar0_size  = 0x20000,
+                # Avoid a cascaded BUFG on PIPECLK in the x1 clock configuration.
+                pclk_mux_direct_from_mmcm = (pcie_lanes == 1))
+            if pcie_lanes == 1:
+                # The IP defaults to X0Y3 (D9/D7), but NeTV2 lane 0 is wired
+                # to X0Y1 (D11/D5). Override the IP's transceiver LOC.
+                self.pcie_phy.add_gt_loc_constraints(["GTPE2_CHANNEL_X0Y1"], by_pipe_lane=False)
             # a7-35 has too little BRAM for the default of 8 (each pending request costs 4 RAMB36
             # for its completion buffer); 4 keeps PCIe fitting on the xc7a35t.
             max_pending_requests = 4 if variant == "a7-35" else 8
@@ -130,6 +138,7 @@ def main():
     parser.add_target_argument("--eth-dynamic-ip", action="store_true",       help="Enable dynamic Ethernet IP assignment.")
     parser.add_target_argument("--remote-ip",      default="192.168.1.100",   help="Remote IP address of TFTP server.")
     parser.add_target_argument("--with-pcie",      action="store_true",       help="Enable PCIe support.")
+    parser.add_target_argument("--pcie-lanes",     default=4, type=int, choices=[1, 2, 4], help="Number of PCIe lanes.")
     parser.add_target_argument("--driver",         action="store_true",       help="Generate PCIe driver.")
     sdopts = parser.target_group.add_mutually_exclusive_group()
     sdopts.add_argument("--with-spi-sdcard", action="store_true", help="Enable SPI-mode SDCard support.")
@@ -144,6 +153,7 @@ def main():
         eth_dynamic_ip = args.eth_dynamic_ip,
         remote_ip      = args.remote_ip,
         with_pcie      = args.with_pcie,
+        pcie_lanes     = args.pcie_lanes,
         **parser.soc_argdict
     )
     if args.with_spi_sdcard:
